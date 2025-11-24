@@ -1,0 +1,17 @@
+# Word documents
+*.docx
+*.doc
+*.docm
+
+# Temporary Word files
+~$*.docx
+~$*.doc
+*.tmp
+
+# R files
+.RData
+.Rhistory
+.Rproj.user
+
+# PNG files (generated plots)
+*.png
