@@ -1,4 +1,4 @@
-# Mann-Kendall Trend Analysis for Seasonal Climatic Variables in Dar es Salaam, Tanzania (2014–2024)
+# Decadal Trends in Seasonal Climatic Variables in Dar es Salaam, Tanzania: A Non-Parametric Approach Using the Mann-Kendall Test
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
 
@@ -10,7 +10,11 @@ The Mann-Kendall test is a non-parametric statistical method widely used in clim
 
 ## Author
 
-**January G. Msemakweli**
+**January G. Msemakweli**  
+Graduate Student | ScM in Epidemiology  
+Bloomberg School of Public Health  
+Johns Hopkins University  
+[![ORCID](https://orcid.org/sites/default/files/images/orcid_16x16.png)](https://orcid.org/0009-0007-6743-8479) https://orcid.org/0009-0007-6743-8479
 
 ## Features
 
@@ -179,8 +183,9 @@ If you use this code or methodology in your research, please cite:
 ```bibtex
 @software{msemakweli2024mannkendall,
   author       = {Msemakweli, January G.},
-  title        = {{Mann-Kendall Trend Analysis for Seasonal Climatic 
-                   Variables in Dar es Salaam, Tanzania (2014–2024)}},
+  title        = {{Decadal Trends in Seasonal Climatic Variables in 
+                   Dar es Salaam, Tanzania: A Non-Parametric Approach 
+                   Using the Mann-Kendall Test}},
   year         = {2024},
   publisher    = {Zenodo},
   doi          = {10.5281/zenodo.XXXXXXX},
@@ -218,13 +223,16 @@ Contributions, issues, and feature requests are welcome. For major changes, plea
 For questions, suggestions, or collaboration opportunities, please contact:
 
 **January G. Msemakweli**  
-Email: [Your email address]  
-Institution: [Your institution]  
-ORCID: [Your ORCID if applicable]
+Graduate Student | ScM in Epidemiology  
+Bloomberg School of Public Health  
+Johns Hopkins University  
+615 N Wolfe St  
+ORCID: [0009-0007-6743-8479](https://orcid.org/0009-0007-6743-8479)
 
 ---
 
 **Keywords**: Mann-Kendall test, Sen's slope, climate trend analysis, time series analysis, Dar es Salaam, Tanzania, rainfall trends, temperature trends, seasonal analysis, non-parametric statistics
 
 **Last Updated**: November 2024
+
 

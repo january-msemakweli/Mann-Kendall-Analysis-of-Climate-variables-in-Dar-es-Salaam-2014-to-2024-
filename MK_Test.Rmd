@@ -1,5 +1,5 @@
 ---
-title: "MK_Test"
+title: "Decadal Trends in Seasonal Climatic Variables in Dar es Salaam, Tanzania: A Non-Parametric Approach Using the Mann-Kendall Test"
 author: "January G. Msemakweli"
 date: "2025-11-24"
 output: html_document
