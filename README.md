@@ -1,6 +1,6 @@
 # Decadal Trends in Seasonal Climatic Variables in Dar es Salaam, Tanzania: A Non-Parametric Approach Using the Mann-Kendall Test
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
+[![DOI](https://zenodo.org/badge/1103447537.svg)](https://doi.org/10.5281/zenodo.17720495)
 
 ## Overview
 
