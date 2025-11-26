@@ -25,6 +25,14 @@ Johns Hopkins University
 - **Statistical tables**: Formatted HTML tables with trend test results
 - **Dual implementation**: Both R Markdown (for reports) and standalone R script versions
 
+## Visual Examples
+
+Here are sample outputs from the analysis:
+
+### Mann-Kendall Z-Scores
+![Z-Score Visualization](zscore_visualization.png)
+*Mann-Kendall Z-scores for each season-variable combination. Horizontal dashed lines indicate critical values (±1.96) for α = 0.05.*
+
 ## Requirements
 
 ### Software
@@ -109,6 +117,16 @@ source("MKTest.R")
 
 Or execute interactively in R/RStudio by running sections sequentially.
 
+### Expected Outputs
+
+Running the analysis will generate:
+- 8 high-resolution PNG files (300 DPI)
+- An HTML table with statistical results (when using the RMD)
+- Console output showing progress and key findings
+
+![Annual Trends](annual_trends.png)
+*Example output: Annual trends showing climatic variables over time with 95% confidence intervals.*
+
 ## Methodology
 
 ### Statistical Methods
@@ -133,6 +151,9 @@ Or execute interactively in R/RStudio by running sections sequentially.
 6. **Visualization**: Generate comprehensive plots showing trends and patterns
 7. **Results Export**: Save statistical tables and publication-ready figures
 
+![Seasonal Boxplots](seasonal_boxplots.png)
+*Example: Seasonal distributions of climatic variables showing central tendencies and variability.*
+
 ## Outputs
 
 ### Statistical Results Table
@@ -145,23 +166,56 @@ A formatted HTML table containing:
 
 ### Visualizations
 
-1. **panel_significant_trends.png**: Time series of variables with statistically significant trends (p < 0.05), with Sen's slope trend lines
+#### 1. Panel Plot of Significant Trends
+![Significant Trends Panel](panel_significant_trends.png)
 
-2. **complete_time_series.png**: Comprehensive panel showing all variables and seasons, with trends distinguished by significance level
+Time series of variables with statistically significant trends (p < 0.05), with Sen's slope trend lines overlaid.
 
-3. **seasonal_boxplots.png**: Box-and-whisker plots showing seasonal distributions of each climatic variable
+---
 
-4. **sens_slope_magnitude.png**: Horizontal bar chart of Sen's slope values, colored by statistical significance
+#### 2. Complete Time Series for All Variables and Seasons
+![Complete Time Series](complete_time_series.png)
 
-5. **annual_trends.png**: Annual mean values by season with linear trend fits and 95% confidence intervals
+Comprehensive panel showing all variables and seasons, with trends distinguished by significance level. Solid lines indicate statistically significant trends; dashed lines indicate non-significant trends.
 
-6. **monthly_climatology.png**: Average monthly values showing typical annual cycles for each variable
+---
 
-7. **zscore_visualization.png**: Mann-Kendall Z-scores for each season-variable combination, with critical value thresholds (±1.96)
+#### 3. Seasonal Box Plots
+![Seasonal Boxplots](seasonal_boxplots.png)
 
-8. **trend_magnitudes_by_variable.png**: Sen's slope magnitudes grouped by variable and season, showing trend directions
+Box-and-whisker plots showing seasonal distributions of each climatic variable, revealing variability and central tendencies.
 
-All plots are saved at 300 DPI resolution suitable for publication.
+---
+
+#### 4. Sen's Slope Magnitude Visualization
+![Sen's Slope Magnitude](sens_slope_magnitude.png)
+
+Horizontal bar chart of Sen's slope values, colored by statistical significance. The magnitude indicates the rate of change per year.
+
+---
+
+#### 5. Annual Trends in Climatic Variables by Season
+![Annual Trends](annual_trends.png)
+
+Annual mean values by season with linear trend fits and 95% confidence intervals (dashed lines show the fitted trends).
+
+---
+
+#### 6. Monthly Climatology
+![Monthly Climatology](monthly_climatology.png)
+
+Average monthly values showing typical annual cycles for each variable, revealing seasonal patterns.
+
+---
+
+#### 7. Mann-Kendall Z-Scores by Season and Variable
+![Z-Score Visualization](zscore_visualization.png)
+
+Mann-Kendall Z-scores for each season-variable combination, with critical value thresholds (±1.96) marked by horizontal dashed lines.
+
+---
+
+**Note**: All plots are saved at 300 DPI resolution suitable for publication.
 
 ## Interpretation Guidelines
 
@@ -173,8 +227,10 @@ All plots are saved at 300 DPI resolution suitable for publication.
 - **Positive Sen's slope**: Increasing trend over time
 - **Negative Sen's slope**: Decreasing trend over time
 
-### Practical Significance
 While statistical significance indicates that a trend is unlikely due to chance, consider the magnitude (Sen's slope) for practical implications. Small but statistically significant trends may have limited practical importance for long-term climate planning.
+
+![Trend Magnitudes by Variable](trend_magnitudes_by_variable.png)
+*Example: Sen's slope magnitudes showing increasing (red) and decreasing (green) trends across seasons.*
 
 ## Citation
 
