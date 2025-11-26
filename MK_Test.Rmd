@@ -225,7 +225,7 @@ p3 <- ggplot(df_long, aes(x = Season, y = value)) +
   )
 
 print(p3)
-ggsave("seasonal_boxplots.png", p3, width = 10, height = 8, dpi = 300)
+ggsave("seasonal_boxplots.png", p3, width = 10, height = 7, dpi = 300)
 ```
 
 ### Sen's Slope Magnitude Visualization
