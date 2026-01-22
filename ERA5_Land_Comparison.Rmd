@@ -1,0 +1,824 @@
+---
+title: "TMA vs ERA5-Land Comparison for Dar es Salaam Climate Data"
+author: "January G. Msemakweli"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## ERA5-Land Validation of TMA Station Data
+
+This analysis compares Tanzania Meteorological Authority (TMA) station observations with ERA5-Land reanalysis data for Dar es Salaam to validate findings using correlation (r) and RMSE.
+
+**Best Practice Approach:** Download ERA5-Land **hourly** 2m temperature and compute:
+
+1. **Daily Tmax** = maximum temperature each day (from 24 hourly values)
+2. **Daily Tmin** = minimum temperature each day (from 24 hourly values)
+3. **Monthly mean of daily Tmax/Tmin** = average of daily max/min values for the month
+
+This properly matches TMA's "monthly maximum/minimum temperature" observations.
+
+**Comparisons:**
+- TMA Daytime Temperature ↔ ERA5-Land Monthly Mean of Daily Tmax
+- TMA Nighttime Temperature ↔ ERA5-Land Monthly Mean of Daily Tmin
+- TMA Rainfall ↔ ERA5-Land Total Precipitation
+
+```{r load-packages}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ecmwfr)
+library(ncdf4)
+
+# Station coordinates (Dar es Salaam)
+LAT <- -6.8781
+LON <- 39.2026
+
+cat("Target coordinates: lat =", LAT, ", lon =", LON, "\n")
+
+# Read CDS API credentials from .cdsapirc file
+cdsapirc_path <- file.path(Sys.getenv("USERPROFILE"), ".cdsapirc")
+cdsapirc <- readLines(cdsapirc_path)
+
+cds_url <- sub("^url:\\s*", "", cdsapirc[grepl("^url:", cdsapirc)])
+cds_key <- sub("^key:\\s*", "", cdsapirc[grepl("^key:", cdsapirc)])
+
+# Set CDS API key
+ecmwfr::wf_set_key(user = "cds", key = cds_key)
+```
+
+### 1. Load and Standardize TMA Data
+
+```{r load-tma-data}
+# Load TMA data
+df <- read_csv("CLIMATE DAR DATASET.csv", show_col_types = FALSE)
+
+cat("Original columns:", paste(names(df), collapse = ", "), "\n")
+cat("Shape:", nrow(df), "rows x", ncol(df), "columns\n\n")
+head(df)
+```
+
+```{r standardize-columns}
+# Standardize column names
+standardize_columns <- function(df) {
+  old_names <- names(df)
+  new_names <- old_names
+  
+  for (i in seq_along(old_names)) {
+    col_lower <- tolower(gsub("[ -]", "_", old_names[i]))
+    
+    if (grepl("month", col_lower)) {
+      new_names[i] <- "month"
+    } else if (grepl("year", col_lower)) {
+      new_names[i] <- "year"
+    } else if (grepl("season", col_lower)) {
+      new_names[i] <- "season_orig"
+    } else if (grepl("daytime|day_temp|tmax", col_lower)) {
+      new_names[i] <- "daytime_temp_c"
+    } else if (grepl("nighttime|night_temp|tmin", col_lower)) {
+      new_names[i] <- "nighttime_temp_c"
+    } else if (grepl("humid|rh", col_lower)) {
+      new_names[i] <- "rh_pct"
+    } else if (grepl("rain|precip", col_lower)) {
+      new_names[i] <- "rainfall_mm"
+    }
+  }
+  
+  names(df) <- new_names
+  return(df)
+}
+
+tma_df <- standardize_columns(df)
+cat("Standardized columns:", paste(names(tma_df), collapse = ", "), "\n")
+```
+
+```{r parse-dates}
+# Parse dates
+month_map <- c(jan=1, feb=2, mar=3, apr=4, may=5, jun=6,
+               jul=7, aug=8, sep=9, oct=10, nov=11, dec=12)
+
+tma_df <- tma_df %>%
+  mutate(
+    month_num = month_map[tolower(substr(month, 1, 3))],
+    date = as.Date(paste(year, month_num, "01", sep = "-")),
+    date_str = format(date, "%Y-%m")
+  ) %>%
+  arrange(date)
+
+cat("\nTMA Date range:", as.character(min(tma_df$date)), "to", as.character(max(tma_df$date)), "\n")
+cat("Total months:", nrow(tma_df), "\n")
+
+# Get year range for ERA5 download
+start_year <- min(tma_df$year)
+end_year <- max(tma_df$year)
+```
+
+### 2. Download ERA5-Land Hourly Data (Month by Month) and Compute Daily Tmax/Tmin
+
+**Best Practice Approach:** Download hourly 2m temperature, compute daily max/min, then monthly means of daily Tmax/Tmin. This properly matches TMA's monthly maximum/minimum temperature observations.
+
+**Note:** Downloads are split by MONTH to avoid CDS request size limits.
+
+```{r download-era5-hourly, cache=TRUE}
+# Define small area around station (for nearest grid cell extraction)
+# ERA5-Land resolution is 0.1° x 0.1°
+north <- LAT + 0.15
+south <- LAT - 0.15
+west <- LON - 0.15
+east <- LON + 0.15
+
+years <- start_year:end_year
+months <- 1:12
+hours <- sprintf("%02d:00", 0:23)  # All 24 hours
+
+# File paths
+precip_file <- "era5_land_precipitation.nc"
+hourly_dir <- "era5_hourly_data"
+
+# Create directory for hourly files
+if (!dir.exists(hourly_dir)) {
+  dir.create(hourly_dir)
+}
+
+# Helper function to download ERA5-Land data for a single month
+download_era5_month <- function(year, month, area) {
+  nc_file <- file.path(hourly_dir, sprintf("era5_land_t2m_%d_%02d.nc", year, month))
+  
+  if (file.exists(nc_file)) {
+    return(nc_file)  # Already downloaded
+  }
+  
+  zip_file <- sub("\\.nc$", ".zip", nc_file)
+  
+  request <- list(
+    dataset_short_name = "reanalysis-era5-land",
+    variable = "2m_temperature",
+    year = as.character(year),
+    month = sprintf("%02d", month),
+    day = sprintf("%02d", 1:31),
+    time = hours,
+    area = area,
+    data_format = "netcdf"
+  )
+  request$target <- zip_file
+  
+  wf_request(request = request, user = "cds", path = ".")
+  
+  # Unzip
+  unzip(zip_file, exdir = hourly_dir)
+  
+  # Find and rename extracted .nc file
+  nc_files <- list.files(hourly_dir, pattern = "^data.*\\.nc$|^[0-9a-f]+.*\\.nc$", full.names = TRUE)
+  if (length(nc_files) > 0) {
+    file.rename(nc_files[1], nc_file)
+  }
+  
+  # Clean up
+  unlink(zip_file)
+  
+  return(nc_file)
+}
+
+# Count existing files and identify missing ones
+existing_files <- list.files(hourly_dir, pattern = "era5_land_t2m_.*\\.nc$", full.names = TRUE)
+total_months <- length(years) * 12
+
+# Build list of all expected files and check which are missing
+all_expected_files <- character()
+missing_files <- list()
+
+for (year in years) {
+  for (month in months) {
+    nc_file <- file.path(hourly_dir, sprintf("era5_land_t2m_%d_%02d.nc", year, month))
+    all_expected_files <- c(all_expected_files, nc_file)
+    if (!file.exists(nc_file)) {
+      missing_files <- c(missing_files, list(c(year = year, month = month, file = nc_file)))
+    }
+  }
+}
+
+cat("=== ERA5-Land Hourly Temperature Download Status ===\n")
+cat("Total months needed:", total_months, "\n")
+cat("Already downloaded:", length(existing_files), "\n")
+cat("Missing:", length(missing_files), "\n")
+
+if (length(missing_files) > 0) {
+  cat("\nMissing months:\n")
+  for (m in missing_files) {
+    cat(sprintf("  - %s-%02d\n", m["year"], as.integer(m["month"])))
+  }
+  cat("\n")
+}
+
+# Only download missing files
+if (length(missing_files) > 0) {
+  cat("Downloading", length(missing_files), "missing month(s)...\n\n")
+  
+  for (i in seq_along(missing_files)) {
+    m <- missing_files[[i]]
+    year <- as.integer(m["year"])
+    month <- as.integer(m["month"])
+    
+    cat(sprintf("[%d/%d] Downloading %d-%02d...", i, length(missing_files), year, month))
+    tryCatch({
+      download_era5_month(year, month, c(north, west, south, east))
+      cat(" done\n")
+    }, error = function(e) {
+      cat(" ERROR:", conditionMessage(e), "\n")
+    })
+  }
+} else {
+  cat("\nAll files already downloaded! Using cached data.\n")
+}
+
+# Collect all successfully downloaded files
+hourly_files <- all_expected_files[file.exists(all_expected_files)]
+cat("\nHourly temperature files available:", length(hourly_files), "of", total_months, "months\n")
+
+# Download total precipitation (monthly averaged reanalysis)
+if (!file.exists(precip_file)) {
+  cat("\nDownloading ERA5-Land monthly precipitation...\n")
+  zip_file <- "era5_land_precipitation.zip"
+  
+  request_precip <- list(
+    dataset_short_name = "reanalysis-era5-land-monthly-means",
+    product_type = "monthly_averaged_reanalysis",
+    variable = "total_precipitation",
+    year = as.character(years),
+    month = sprintf("%02d", months),
+    time = "00:00",
+    area = c(north, west, south, east),
+    data_format = "netcdf"
+  )
+  request_precip$target <- zip_file
+  
+  wf_request(request = request_precip, user = "cds", path = ".")
+  unzip(zip_file, exdir = ".")
+  
+  nc_files <- list.files(pattern = "^data.*\\.nc$|^[0-9a-f]+.*\\.nc$")
+  if (length(nc_files) > 0) {
+    file.rename(nc_files[1], precip_file)
+  }
+  unlink(zip_file)
+  cat("  Precipitation downloaded.\n")
+}
+
+cat("\nERA5-Land data files ready.\n")
+```
+
+### 3. Process ERA5-Land Hourly Data → Daily Tmax/Tmin → Monthly Means
+
+```{r process-era5-data}
+# Function to extract nearest grid cell from hourly data (single file)
+extract_hourly_from_file <- function(nc_file, lat_target, lon_target, verbose = FALSE) {
+  nc <- nc_open(nc_file)
+  
+  # Get coordinates
+  lat <- ncvar_get(nc, "latitude")
+  lon <- ncvar_get(nc, "longitude")
+  
+  # Find nearest grid cell
+  lat_idx <- which.min(abs(lat - lat_target))
+  lon_idx <- which.min(abs(lon - lon_target))
+  
+  if (verbose) {
+    cat("  Grid cell: lat =", lat[lat_idx], ", lon =", lon[lon_idx], "\n")
+    cat("  Distance from station:", 
+        round(sqrt((lat[lat_idx] - lat_target)^2 + (lon[lon_idx] - lon_target)^2) * 111, 2), "km\n")
+  }
+  
+  # Get variable name
+  vars <- names(nc$var)
+  exclude <- c("time", "valid_time", "lat", "lon", "latitude", "longitude", "expver", "number")
+  var_name <- vars[!vars %in% exclude][1]
+  
+  # Get time dimension
+  if ("valid_time" %in% names(nc$dim)) {
+    time_vals <- ncvar_get(nc, "valid_time")
+    datetimes <- as.POSIXct(time_vals, origin = "1970-01-01", tz = "UTC")
+  } else {
+    time_vals <- ncvar_get(nc, "time")
+    time_units <- ncatt_get(nc, "time", "units")$value
+    if (grepl("hours since 1900", time_units)) {
+      datetimes <- as.POSIXct(time_vals * 3600, origin = "1900-01-01", tz = "UTC")
+    } else {
+      datetimes <- as.POSIXct(time_vals, origin = "1970-01-01", tz = "UTC")
+    }
+  }
+  
+  # Extract data at nearest grid cell
+  data_full <- ncvar_get(nc, var_name)
+  
+  # Handle different array dimensions
+  if (length(dim(data_full)) == 3) {
+    data_series <- data_full[lon_idx, lat_idx, ]
+  } else if (length(dim(data_full)) == 2) {
+    data_series <- data_full[1, ]
+  } else {
+    data_series <- as.vector(data_full)
+  }
+  
+  nc_close(nc)
+  
+  data.frame(
+    datetime = datetimes,
+    temp_k = as.vector(data_series)
+  )
+}
+
+# Process all monthly hourly temperature files
+cat("\nProcessing hourly temperature data from", length(hourly_files), "monthly files:\n")
+
+hourly_list <- list()
+for (i in seq_along(hourly_files)) {
+  if (i == 1 || i %% 12 == 0) {
+    cat("  Processing file", i, "of", length(hourly_files), "...\n")
+  }
+  hourly_list[[i]] <- extract_hourly_from_file(hourly_files[i], LAT, LON, verbose = (i == 1))
+}
+
+# Combine all months
+hourly_df <- bind_rows(hourly_list)
+cat("\nTotal hourly observations:", nrow(hourly_df), "\n")
+
+# Convert K to °C and extract date components
+hourly_df <- hourly_df %>%
+  mutate(
+    temp_c = temp_k - 273.15,
+    date = as.Date(datetime),
+    year = as.integer(format(date, "%Y")),
+    month_num = as.integer(format(date, "%m"))
+  )
+
+cat("  Hourly data range:", as.character(min(hourly_df$date)), "to", 
+    as.character(max(hourly_df$date)), "\n")
+
+# Compute DAILY Tmax and Tmin
+cat("\nComputing daily Tmax and Tmin from hourly data...\n")
+daily_df <- hourly_df %>%
+  group_by(date, year, month_num) %>%
+  summarise(
+    daily_tmax = max(temp_c, na.rm = TRUE),
+    daily_tmin = min(temp_c, na.rm = TRUE),
+    n_hours = n(),
+    .groups = "drop"
+  ) %>%
+  filter(n_hours >= 20)  # Require at least 20 hours of data per day
+
+cat("  Total days with sufficient data:", nrow(daily_df), "\n")
+
+# Compute MONTHLY means of daily Tmax and Tmin
+cat("\nComputing monthly means of daily Tmax/Tmin...\n")
+monthly_temp_df <- daily_df %>%
+  group_by(year, month_num) %>%
+  summarise(
+    era5_tmax_c = mean(daily_tmax, na.rm = TRUE),  # Monthly mean of daily Tmax
+    era5_tmin_c = mean(daily_tmin, na.rm = TRUE),  # Monthly mean of daily Tmin
+    n_days = n(),
+    .groups = "drop"
+  ) %>%
+  filter(n_days >= 25)  # Require at least 25 days per month
+
+cat("  Months with sufficient data:", nrow(monthly_temp_df), "\n")
+
+# Function to extract monthly precipitation
+extract_monthly_precip <- function(nc_file) {
+  nc <- nc_open(nc_file)
+  
+  lat <- ncvar_get(nc, "latitude")
+  lon <- ncvar_get(nc, "longitude")
+  lat_idx <- which.min(abs(lat - LAT))
+  lon_idx <- which.min(abs(lon - LON))
+  
+  vars <- names(nc$var)
+  exclude <- c("time", "valid_time", "lat", "lon", "latitude", "longitude", "expver", "number")
+  var_name <- vars[!vars %in% exclude][1]
+  
+  if ("valid_time" %in% names(nc$dim)) {
+    time_vals <- ncvar_get(nc, "valid_time")
+    dates <- as.POSIXct(time_vals, origin = "1970-01-01", tz = "UTC")
+  } else {
+    time_vals <- ncvar_get(nc, "time")
+    dates <- as.POSIXct(time_vals * 3600, origin = "1900-01-01", tz = "UTC")
+  }
+  
+  data_full <- ncvar_get(nc, var_name)
+  if (length(dim(data_full)) == 3) {
+    data_series <- data_full[lon_idx, lat_idx, ]
+  } else {
+    data_series <- as.vector(data_full)
+  }
+  
+  nc_close(nc)
+  
+  data.frame(date = as.Date(dates), value = as.vector(data_series))
+}
+
+# Extract precipitation
+cat("\nProcessing Precipitation:\n")
+precip_raw <- extract_monthly_precip(precip_file)
+precip_df <- precip_raw %>%
+  mutate(
+    era5_precip_mm = value * 1000 * 30.44,  # m/day -> mm/month
+    year = as.integer(format(date, "%Y")),
+    month_num = as.integer(format(date, "%m"))
+  ) %>%
+  select(year, month_num, era5_precip_mm)
+
+cat("  Grid cell: same as temperature\n")
+cat("  Precipitation months:", nrow(precip_df), "\n")
+
+# Combine ERA5-Land data
+era5_df <- monthly_temp_df %>%
+  inner_join(precip_df, by = c("year", "month_num")) %>%
+  mutate(
+    date = as.Date(paste(year, month_num, "01", sep = "-")),
+    date_str = format(date, "%Y-%m")
+  )
+
+cat("\n", strrep("=", 50), "\n")
+cat("ERA5-Land FINAL processed:", nrow(era5_df), "months\n")
+cat("Date range:", as.character(min(era5_df$date)), "to", as.character(max(era5_df$date)), "\n")
+cat("Method: Monthly mean of DAILY Tmax/Tmin (computed from hourly data)\n")
+cat(strrep("=", 50), "\n")
+```
+
+### 4. Merge TMA and ERA5-Land Data
+
+```{r merge-data}
+# Merge datasets by year and month
+comparison_df <- tma_df %>%
+  select(year, month_num, date, date_str,
+         tma_daytime = daytime_temp_c,
+         tma_nighttime = nighttime_temp_c,
+         tma_rainfall = rainfall_mm) %>%
+  inner_join(
+    era5_df %>% select(year, month_num, era5_tmax_c, era5_tmin_c, era5_precip_mm),
+    by = c("year", "month_num")
+  )
+
+cat("Merged dataset:", nrow(comparison_df), "months\n")
+cat("Date range:", as.character(min(comparison_df$date)), "to", 
+    as.character(max(comparison_df$date)), "\n")
+```
+
+### 5. Assign TMA Seasons and Compute Seasonal Aggregates
+
+```{r seasonal-aggregation}
+# TMA season definitions
+assign_season <- function(month) {
+  case_when(
+    month %in% c(1, 2) ~ "JF",
+    month %in% c(3, 4, 5) ~ "MAM",
+    month %in% c(6, 7, 8) ~ "JJA",
+    month == 9 ~ "S",
+    month %in% c(10, 11, 12) ~ "OND"
+  )
+}
+
+comparison_df <- comparison_df %>%
+  mutate(season = assign_season(month_num))
+
+# Compute seasonal aggregates
+seasonal_df <- comparison_df %>%
+  group_by(year, season) %>%
+  summarise(
+    # TMA seasonal means/totals
+    tma_daytime_mean = mean(tma_daytime, na.rm = TRUE),
+    tma_nighttime_mean = mean(tma_nighttime, na.rm = TRUE),
+    tma_rainfall_total = sum(tma_rainfall, na.rm = TRUE),
+    # ERA5-Land seasonal means/totals
+    era5_tmax_mean = mean(era5_tmax_c, na.rm = TRUE),
+    era5_tmin_mean = mean(era5_tmin_c, na.rm = TRUE),
+    era5_precip_total = sum(era5_precip_mm, na.rm = TRUE),
+    n_months = n(),
+    .groups = "drop"
+  ) %>%
+  # Ensure complete seasons (exclude incomplete)
+  filter(
+    (season == "JF" & n_months == 2) |
+    (season == "MAM" & n_months == 3) |
+    (season == "JJA" & n_months == 3) |
+    (season == "S" & n_months == 1) |
+    (season == "OND" & n_months == 3)
+  )
+
+cat("Seasonal data:", nrow(seasonal_df), "season-years\n")
+cat("Seasons:", paste(unique(seasonal_df$season), collapse = ", "), "\n")
+table(seasonal_df$season)
+```
+
+### 6. Agreement Assessment: Correlation (r) and RMSE
+
+```{r agreement-metrics}
+# Function to calculate agreement metrics
+calc_agreement <- function(obs, pred, var_name) {
+  valid <- complete.cases(obs, pred)
+  obs <- obs[valid]
+  pred <- pred[valid]
+  
+  n <- length(obs)
+  r <- cor(obs, pred)
+  r_pval <- cor.test(obs, pred)$p.value
+  rmse <- sqrt(mean((obs - pred)^2))
+  mae <- mean(abs(obs - pred))
+  bias <- mean(pred - obs)
+  
+  data.frame(
+    Variable = var_name,
+    n = n,
+    r = r,
+    p_value = r_pval,
+    RMSE = rmse,
+    MAE = mae,
+    Bias = bias
+  )
+}
+
+# Monthly agreement
+monthly_agreement <- bind_rows(
+  calc_agreement(comparison_df$tma_daytime, comparison_df$era5_tmax_c, 
+                 "Daytime Temp vs Tmax (°C)"),
+  calc_agreement(comparison_df$tma_nighttime, comparison_df$era5_tmin_c, 
+                 "Nighttime Temp vs Tmin (°C)"),
+  calc_agreement(comparison_df$tma_rainfall, comparison_df$era5_precip_mm, 
+                 "Rainfall (mm)")
+)
+
+cat("\n", strrep("=", 70), "\n")
+cat("MONTHLY AGREEMENT: TMA vs ERA5-Land\n")
+cat(strrep("=", 70), "\n\n")
+knitr::kable(monthly_agreement, digits = 3)
+
+# Seasonal agreement
+seasonal_agreement <- bind_rows(
+  calc_agreement(seasonal_df$tma_daytime_mean, seasonal_df$era5_tmax_mean, 
+                 "Daytime Temp vs Tmax (°C)"),
+  calc_agreement(seasonal_df$tma_nighttime_mean, seasonal_df$era5_tmin_mean, 
+                 "Nighttime Temp vs Tmin (°C)"),
+  calc_agreement(seasonal_df$tma_rainfall_total, seasonal_df$era5_precip_total, 
+                 "Rainfall Total (mm)")
+)
+
+cat("\n", strrep("=", 70), "\n")
+cat("SEASONAL AGREEMENT: TMA vs ERA5-Land\n")
+cat(strrep("=", 70), "\n\n")
+knitr::kable(seasonal_agreement, digits = 3)
+```
+
+### 7. Scatter Plots with r and RMSE
+
+```{r scatter-plots-monthly, fig.width=10, fig.height=4}
+# Color scheme
+TMA_COLOR <- "#1f77b4"
+ERA5_COLOR <- "#ff7f0e"
+
+# Prepare monthly scatter data - create each variable comparison separately
+scatter_monthly <- bind_rows(
+  comparison_df %>%
+    select(TMA = tma_daytime, ERA5 = era5_tmax_c) %>%
+    mutate(Variable = "Daytime Temp vs Tmax (°C)"),
+  comparison_df %>%
+    select(TMA = tma_nighttime, ERA5 = era5_tmin_c) %>%
+    mutate(Variable = "Nighttime Temp vs Tmin (°C)"),
+  comparison_df %>%
+    select(TMA = tma_rainfall, ERA5 = era5_precip_mm) %>%
+    mutate(Variable = "Rainfall (mm)")
+)
+
+# Stats labels
+stats_monthly <- scatter_monthly %>%
+  group_by(Variable) %>%
+  summarise(
+    r = cor(TMA, ERA5, use = "complete.obs"),
+    rmse = sqrt(mean((TMA - ERA5)^2, na.rm = TRUE)),
+    .groups = "drop"
+  ) %>%
+  mutate(label = sprintf("r = %.2f\nRMSE = %.1f", r, rmse))
+
+# Monthly scatter plot
+p_monthly <- ggplot(scatter_monthly, aes(x = TMA, y = ERA5)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.8) +
+  geom_point(alpha = 0.5, color = TMA_COLOR, size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = ERA5_COLOR, fill = ERA5_COLOR, alpha = 0.2) +
+  geom_text(data = stats_monthly, aes(x = -Inf, y = Inf, label = label),
+            hjust = -0.1, vjust = 1.3, size = 3.5, fontface = "bold", inherit.aes = FALSE) +
+  facet_wrap(~ Variable, scales = "free", ncol = 3) +
+  labs(x = "TMA Station Data", y = "ERA5-Land Reanalysis") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = "grey20"),
+    strip.text = element_text(color = "white", face = "bold", size = 11)
+  )
+
+print(p_monthly)
+ggsave("tma_vs_era5_monthly_scatter.png", p_monthly, width = 10, height = 4, dpi = 300, bg = "white")
+```
+
+
+
+### 8. Time Series Comparison
+
+```{r time-series, fig.width=10, fig.height=8}
+# Time series data - create each series separately
+ts_data <- bind_rows(
+  comparison_df %>%
+    select(date, Value = tma_daytime) %>%
+    mutate(Source = "TMA", Panel = "Daytime Temp / Tmax (°C)"),
+  comparison_df %>%
+    select(date, Value = era5_tmax_c) %>%
+    mutate(Source = "ERA5-Land", Panel = "Daytime Temp / Tmax (°C)"),
+  comparison_df %>%
+    select(date, Value = tma_nighttime) %>%
+    mutate(Source = "TMA", Panel = "Nighttime Temp / Tmin (°C)"),
+  comparison_df %>%
+    select(date, Value = era5_tmin_c) %>%
+    mutate(Source = "ERA5-Land", Panel = "Nighttime Temp / Tmin (°C)"),
+  comparison_df %>%
+    select(date, Value = tma_rainfall) %>%
+    mutate(Source = "TMA", Panel = "Rainfall (mm)"),
+  comparison_df %>%
+    select(date, Value = era5_precip_mm) %>%
+    mutate(Source = "ERA5-Land", Panel = "Rainfall (mm)")
+)
+
+p_ts <- ggplot(ts_data, aes(x = date, y = Value, color = Source)) +
+  geom_line(linewidth = 0.6, alpha = 0.8) +
+  facet_wrap(~ Panel, scales = "free_y", ncol = 1) +
+  scale_color_manual(values = c("TMA" = TMA_COLOR, "ERA5-Land" = ERA5_COLOR)) +
+  labs(x = "Date", y = NULL, color = "Data Source") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = "grey20"),
+    strip.text = element_text(color = "white", face = "bold"),
+    legend.position = "bottom"
+  )
+
+print(p_ts)
+ggsave("tma_vs_era5_timeseries.png", p_ts, width = 10, height = 8, dpi = 300, bg = "white")
+```
+
+### 9. Mann-Kendall Trend Comparison: TMA vs ERA5-Land
+
+This section compares whether the detected trends are consistent between TMA and ERA5-Land data using the same methodology as the main analysis (monthly data by season).
+
+```{r trend-comparison-setup}
+library(Kendall)
+library(trend)
+library(kableExtra)
+
+# Mann-Kendall function (same as MK_Test.Rmd)
+run_mk <- function(x) {
+  mk <- MannKendall(x)
+  sen_result <- sens.slope(x)
+  sen <- sen_result$estimates
+  sen_ci <- sen_result$conf.int
+  S <- mk$S
+  varS <- mk$varS
+  
+  if (varS > 0) {
+    if (S > 0) {
+      Z <- (S - 1) / sqrt(varS)
+    } else if (S == 0) {
+      Z <- 0
+    } else {
+      Z <- (S + 1) / sqrt(varS)
+    }
+  } else {
+    Z <- 0
+  }
+  
+  return(list(Z = Z, p = mk$sl, slope = sen, ci_lower = sen_ci[1], ci_upper = sen_ci[2]))
+}
+
+# Define variables for comparison (using monthly data, same approach as MK_Test.Rmd)
+vars_tma <- c("tma_daytime", "tma_nighttime", "tma_rainfall")
+vars_era5 <- c("era5_tmax_c", "era5_tmin_c", "era5_precip_mm")
+var_labels <- c("Daytime Temperature (°C)", "Nighttime Temperature (°C)", "Rainfall (mm)")
+```
+
+```{r trend-comparison-analysis}
+# Run Mann-Kendall tests on MONTHLY data for each season (same as MK_Test.Rmd)
+trend_results <- data.frame()
+
+for (s in unique(comparison_df$season)) {
+  sub_data <- comparison_df %>% filter(season == s) %>% arrange(date)
+  
+  for (i in seq_along(vars_tma)) {
+    v_tma <- vars_tma[i]
+    v_era5 <- vars_era5[i]
+    label <- var_labels[i]
+    
+    x_tma <- sub_data[[v_tma]]
+    x_era5 <- sub_data[[v_era5]]
+    
+    if (length(x_tma) >= 8 && length(x_era5) >= 8) {
+      # TMA Mann-Kendall
+      mkout_tma <- run_mk(x_tma)
+      
+      # ERA5-Land Mann-Kendall
+      mkout_era5 <- run_mk(x_era5)
+      
+      trend_results <- rbind(trend_results, data.frame(
+        Season = s,
+        Variable = label,
+        TMA_Z = round(mkout_tma$Z, 4),
+        TMA_p_value = round(mkout_tma$p, 5),
+        TMA_Sen_slope = round(mkout_tma$slope, 5),
+        TMA_CI_lower = round(mkout_tma$ci_lower, 5),
+        TMA_CI_upper = round(mkout_tma$ci_upper, 5),
+        ERA5_Z = round(mkout_era5$Z, 4),
+        ERA5_p_value = round(mkout_era5$p, 5),
+        ERA5_Sen_slope = round(mkout_era5$slope, 5),
+        ERA5_CI_lower = round(mkout_era5$ci_lower, 5),
+        ERA5_CI_upper = round(mkout_era5$ci_upper, 5)
+      ))
+    }
+  }
+}
+
+# Calculate Bonferroni correction
+n_tests <- nrow(trend_results)
+trend_results$TMA_p_bonferroni <- pmin(trend_results$TMA_p_value * n_tests, 1)
+trend_results$ERA5_p_bonferroni <- pmin(trend_results$ERA5_p_value * n_tests, 1)
+
+# Display TMA results table
+trend_results %>%
+  mutate(
+    TMA_Sen_slope_CI = paste0(round(TMA_Sen_slope, 5), " [", round(TMA_CI_lower, 5), ", ", round(TMA_CI_upper, 5), "]"),
+    TMA_p_corrected = round(TMA_p_bonferroni, 5)
+  ) %>%
+  select(Season, Variable, TMA_Z, TMA_p_value, TMA_p_corrected, TMA_Sen_slope_CI) %>%
+  kable(
+    format = "html",
+    caption = "Mann-Kendall Trend Test Results for TMA Data (2014-2024)",
+    col.names = c("Season", "Variable", "Z-Score", "p-value", "p-value (Bonferroni)", "Sen's slope [95% CI]"),
+    digits = 5
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover"))
+```
+
+```{r era5-mk-results}
+# Display ERA5-Land results table
+trend_results %>%
+  mutate(
+    ERA5_Sen_slope_CI = paste0(round(ERA5_Sen_slope, 5), " [", round(ERA5_CI_lower, 5), ", ", round(ERA5_CI_upper, 5), "]"),
+    ERA5_p_corrected = round(ERA5_p_bonferroni, 5)
+  ) %>%
+  select(Season, Variable, ERA5_Z, ERA5_p_value, ERA5_p_corrected, ERA5_Sen_slope_CI) %>%
+  kable(
+    format = "html",
+    caption = "Mann-Kendall Trend Test Results for ERA5-Land Data (2014-2024)",
+    col.names = c("Season", "Variable", "Z-Score", "p-value", "p-value (Bonferroni)", "Sen's slope [95% CI]"),
+    digits = 5
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover"))
+```
+
+```{r trend-comparison-summary}
+# Create comparison summary table
+comparison_summary <- trend_results %>%
+  mutate(
+    TMA_Direction = ifelse(TMA_Sen_slope > 0, "Increasing", "Decreasing"),
+    ERA5_Direction = ifelse(ERA5_Sen_slope > 0, "Increasing", "Decreasing"),
+    TMA_Sig = ifelse(TMA_p_value < 0.05, "Significant", "Not Significant"),
+    ERA5_Sig = ifelse(ERA5_p_value < 0.05, "Significant", "Not Significant"),
+    Direction_Match = ifelse(TMA_Direction == ERA5_Direction, "Yes", "No"),
+    Significance_Match = ifelse(TMA_Sig == ERA5_Sig, "Yes", "No")
+  )
+
+comparison_summary %>%
+  select(Season, Variable, 
+         TMA_Z, TMA_p_value, TMA_Direction, TMA_Sig,
+         ERA5_Z, ERA5_p_value, ERA5_Direction, ERA5_Sig,
+         Direction_Match, Significance_Match) %>%
+  kable(
+    format = "html",
+    caption = "Trend Comparison: TMA vs ERA5-Land (using same Mann-Kendall methodology)",
+    col.names = c("Season", "Variable", 
+                  "TMA Z", "TMA p", "TMA Dir", "TMA Sig",
+                  "ERA5 Z", "ERA5 p", "ERA5 Dir", "ERA5 Sig",
+                  "Dir Match", "Sig Match"),
+    digits = 4
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover"))
+
+# Count matches
+n_total <- nrow(comparison_summary)
+n_direction_match <- sum(comparison_summary$Direction_Match == "Yes")
+n_sig_match <- sum(comparison_summary$Significance_Match == "Yes")
+
+cat("\n\nSUMMARY:\n")
+cat(sprintf("Direction agreement: %d/%d (%.0f%%)\n", n_direction_match, n_total, 100*n_direction_match/n_total))
+cat(sprintf("Significance agreement: %d/%d (%.0f%%)\n", n_sig_match, n_total, 100*n_sig_match/n_total))
+```

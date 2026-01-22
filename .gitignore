@@ -1,17 +1,44 @@
-# Word documents
+# Ignore everything by default
+*
+
+# But not these files/patterns
+!.gitignore
+!README.md
+!*.csv
+!*.Rmd
+!*.R
+!*.png
+!*.jpg
+!*.jpeg
+
+# Allow directories to be traversed (but their contents will still be filtered)
+!*/
+
+# Explicitly ignore these even if they match above patterns
+*.pdf
+*.PDF
 *.docx
 *.doc
 *.docm
+*.DOCX
+*.DOC
 
-# Temporary Word files
-~$*.docx
-~$*.doc
+# Ignore temporary and generated files
+~$*
 *.tmp
+*.bak
 
-# R files
+# Ignore R session files
 .RData
 .Rhistory
-.Rproj.user
+.Rproj.user/
 
-# PNG files (generated plots)
-*.png
+# Ignore NetCDF data files
+*.nc
+
+# Ignore HTML output files
+*.html
+
+# Ignore cache directories
+*_cache/
+*_files/

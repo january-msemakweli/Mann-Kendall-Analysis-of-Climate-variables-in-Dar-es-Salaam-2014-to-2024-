@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
 ## Mann-Kendall Trend Analysis for Seasonal Climatic Variables
@@ -32,7 +32,7 @@ library(kableExtra)
 library(ggplot2)
 library(tidyr)
 
-df <- read_csv("CLIMATE DAR DATASET.csv")
+df <- read_csv("CLIMATE DAR DATASET.csv", show_col_types = FALSE)
 df$date <- as.Date(paste(df$Year, df$Month, "01", sep = "-"), format="%Y-%b-%d")
 
 vars <- c("rainfall_mm",
@@ -47,7 +47,9 @@ var_labels <- c("Rainfall (mm)",
 
 run_mk <- function(x) {
   mk <- MannKendall(x)
-  sen <- sens.slope(x)$estimates
+  sen_result <- sens.slope(x)
+  sen <- sen_result$estimates
+  sen_ci <- sen_result$conf.int
   S <- mk$S
   varS <- mk$varS
   
@@ -63,7 +65,7 @@ run_mk <- function(x) {
     Z <- 0
   }
   
-  return(list(Z = Z, p = mk$sl, slope = sen))
+  return(list(Z = Z, p = mk$sl, slope = sen, ci_lower = sen_ci[1], ci_upper = sen_ci[2]))
 }
 
 results <- data.frame()
@@ -83,23 +85,448 @@ for (s in unique(df$Season)) {
         Variable = label,
         Z = round(mkout$Z, 4),
         p_value = round(mkout$p, 5),
-        Sen_slope = round(mkout$slope, 5)
+        Sen_slope = round(mkout$slope, 5),
+        CI_lower = round(mkout$ci_lower, 5),
+        CI_upper = round(mkout$ci_upper, 5)
       ))
     }
   }
 }
 
+# Calculate Bonferroni correction
+n_tests <- nrow(results)
+results$p_value_bonferroni <- pmin(results$p_value * n_tests, 1)
+
 results %>%
+  mutate(
+    Sen_slope_CI = paste0(round(Sen_slope, 5), " [", round(CI_lower, 5), ", ", round(CI_upper, 5), "]"),
+    p_value_corrected = round(p_value_bonferroni, 5)
+  ) %>%
+  select(Season, Variable, Z, p_value, p_value_corrected, Sen_slope_CI) %>%
   kable(
     format = "html",
     caption = "Mann–Kendall Trend Test Results for Seasonal Climatic Variables (2014–2024)",
-    col.names = c("Season", "Variable", "Z-Score", "p-value", "Sen's slope"),
+    col.names = c("Season", "Variable", "Z-Score", "p-value", "p-value (Bonferroni)", "Sen's slope [95% CI]"),
     digits = 5
   ) %>%
   kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover"))
 
 ```
 
+## Statistical Power Analysis: Minimum Detectable Trends
+
+This section assesses the statistical power of the trend analysis by calculating the Minimum Detectable Trend (MDT) at 80% power and estimating the approximate power for each observed Sen's slope. This helps contextualize non-significant findings—distinguishing between genuine stability and insufficient power to detect real trends.
+
+```{r}
+library(dplyr)
+library(knitr)
+library(kableExtra)
+
+power_slope_ols <- function(x, alpha = 0.05, power_target = 0.80){
+  x <- x[!is.na(x)]
+  n <- length(x)
+  if(n < 8) return(NULL)
+
+  t <- 1:n
+  fit <- lm(x ~ t)
+  sigma <- summary(fit)$sigma
+  Sxx <- sum((t - mean(t))^2)
+
+  se_b <- sigma / sqrt(Sxx)
+
+  # Approximate MDT for target power (two-sided)
+  tcrit <- qt(1 - alpha/2, df = n - 2)
+  tpow  <- qt(power_target, df = n - 2)
+  mdt <- (tcrit + tpow) * se_b
+
+  list(n=n, sigma=sigma, se_b=se_b, MDT=mdt)
+}
+
+power_for_given_slope <- function(x, slope, alpha = 0.05){
+  x <- x[!is.na(x)]
+  n <- length(x)
+  if(n < 8) return(NA_real_)
+
+  t <- 1:n
+  fit <- lm(x ~ t)
+  sigma <- summary(fit)$sigma
+  Sxx <- sum((t - mean(t))^2)
+  se_b <- sigma / sqrt(Sxx)
+
+  tcrit <- qt(1 - alpha/2, df = n - 2)
+  ncp <- abs(slope) / se_b
+
+  # Normal approximation to power
+  pnorm(ncp - tcrit) + pnorm(-ncp - tcrit)
+}
+
+power_table <- data.frame()
+
+for (s in unique(df$Season)) {
+  sub_data <- df %>% filter(Season == s) %>% arrange(date)
+
+  for (i in seq_along(vars)) {
+    v <- vars[i]
+    label <- var_labels[i]
+    x <- sub_data[[v]]
+
+    out <- power_slope_ols(x, alpha = 0.05, power_target = 0.80)
+    if(!is.null(out)){
+
+      obs <- results %>% filter(Season == s, Variable == label)
+      obs_sen <- if(nrow(obs) > 0) as.numeric(obs$Sen_slope[1]) else NA_real_
+      obs_power <- if(!is.na(obs_sen)) power_for_given_slope(x, obs_sen, alpha = 0.05) else NA_real_
+
+      power_table <- rbind(power_table, data.frame(
+        Season = s,
+        Variable = label,
+        n = out$n,
+        Residual_SD = out$sigma,
+        MDT_80pct = out$MDT,
+        Observed_SenSlope = obs_sen,
+        Power_for_Observed = obs_power
+      ))
+    }
+  }
+}
+
+power_table_fmt <- power_table %>%
+  mutate(
+    Residual_SD = round(Residual_SD, 3),
+    MDT_80pct = round(MDT_80pct, 4),
+    Observed_SenSlope = round(Observed_SenSlope, 4),
+    Power_for_Observed = round(Power_for_Observed, 2)
+  )
+
+power_table_fmt %>%
+  kable(
+    format = "html",
+    caption = "Minimum Detectable Trend (MDT) at 80% power and approximate power for observed Sen slopes (OLS-based approximation; α=0.05).",
+    col.names = c("Season", "Variable", "n", "Residual SD", "MDT (80% power)", "Observed Sen slope", "Power for observed slope")
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  footnote(
+    general = "MDT is the smallest trend magnitude expected to be detected with ~80% power at α=0.05 under an OLS approximation. Power values are approximate and are used to contextualize non-significant findings (e.g., relative humidity) as potentially underpowered rather than confirming stability.",
+    general_title = "Note:"
+  )
+```
+
+**Interpretation of Power Analysis Results:**
+
+The power analysis above provides critical context for interpreting Mann–Kendall test results. Non-significant findings (p ≥ 0.05) should not be automatically interpreted as evidence of no trend—they may instead reflect insufficient statistical power to detect existing trends, particularly when the observed slope is smaller than the Minimum Detectable Trend (MDT). Variables with power estimates below 0.80 for their observed slopes are considered potentially underpowered. Additionally, statistically significant trends with observed slopes near the MDT threshold represent relatively weak signals that, while detectable, may have limited practical significance. Notably, **Relative Humidity (RH)** tends to exhibit high residual variability, which inflates the MDT and reduces power; thus, non-significant RH trends should be interpreted with caution as potentially reflecting power limitations rather than genuine climatic stability. This power assessment helps distinguish between true absence of trends and analytical limitations due to sample size and variability.
+
+## Lag-1 Autocorrelation Diagnostics
+
+```{r}
+# Calculate lag-1 autocorrelation for each time series
+autocorr_results <- data.frame()
+
+for (s in unique(df$Season)) {
+  sub_data <- df %>% filter(Season == s) %>% arrange(date)
+  
+  for (i in seq_along(vars)) {
+    v <- vars[i]
+    label <- var_labels[i]
+    x <- sub_data[[v]]
+    
+    if (length(x) >= 8) {
+      # Remove NA values for autocorrelation calculation
+      x_clean <- x[!is.na(x)]
+      if (length(x_clean) >= 8) {
+        # Calculate lag-1 autocorrelation
+        acf_result <- acf(x_clean, lag.max = 1, plot = FALSE)
+        lag1_acf <- acf_result$acf[2]
+        
+        # Determine implications for Type I error
+        # Positive autocorrelation inflates Type I error
+        # Negative autocorrelation deflates Type I error
+        if (abs(lag1_acf) < 0.1) {
+          implication <- "Negligible effect on Type I error"
+          risk_level <- "Low"
+        } else if (lag1_acf > 0.1 & lag1_acf < 0.3) {
+          implication <- "Slight inflation of Type I error"
+          risk_level <- "Moderate"
+        } else if (lag1_acf >= 0.3) {
+          implication <- "Substantial inflation of Type I error (may require pre-whitening)"
+          risk_level <- "High"
+        } else if (lag1_acf < -0.1 & lag1_acf > -0.3) {
+          implication <- "Slight deflation of Type I error"
+          risk_level <- "Moderate"
+        } else {
+          implication <- "Substantial deflation of Type I error"
+          risk_level <- "High"
+        }
+        
+        autocorr_results <- rbind(autocorr_results, data.frame(
+          Season = s,
+          Variable = label,
+          Lag1_ACF = round(lag1_acf, 4),
+          Implication = implication,
+          Risk_Level = risk_level
+        ))
+      }
+    }
+  }
+}
+
+autocorr_results %>%
+  kable(
+    format = "html",
+    caption = "Lag-1 Autocorrelation Diagnostics and Implications for Type I Error",
+    col.names = c("Season", "Variable", "Lag-1 ACF", "Implication for Type I Error", "Risk Level"),
+    digits = 4
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  footnote(
+    general = "Lag-1 autocorrelation (ACF) measures the correlation between consecutive observations. Positive autocorrelation can inflate Type I error rates in trend tests, leading to false positives. Values |ACF| < 0.1 indicate negligible effect; 0.1 ≤ |ACF| < 0.3 indicate moderate effect; |ACF| ≥ 0.3 indicate substantial effect and may require pre-whitening procedures.",
+    general_title = "Note:"
+  )
+
+```
+
+## Trend-Free Pre-Whitening (TFPW) Analysis
+
+```{r}
+# Trend-Free Pre-Whitening function
+# Based on Wang & Swail (2001) and Yue et al. (2002)
+tfpw <- function(x) {
+  # Remove NA values
+  x_clean <- x[!is.na(x)]
+  n <- length(x_clean)
+  
+  if (n < 8) {
+    return(NA)
+  }
+  
+  # Step 1: Estimate trend using Sen's slope
+  sen_slope <- sens.slope(x_clean)$estimates
+  t <- 1:n
+  
+  # Step 2: Remove trend
+  x_detrended <- x_clean - sen_slope * t
+  
+  # Step 3: Estimate AR(1) coefficient from detrended series
+  if (n > 1) {
+    # Calculate lag-1 autocorrelation
+    acf_result <- acf(x_detrended, lag.max = 1, plot = FALSE)
+    rho <- acf_result$acf[2]
+    
+    # Constrain rho to [-0.99, 0.99] to avoid numerical issues
+    rho <- max(-0.99, min(0.99, rho))
+    
+    # Step 4: Pre-whiten the detrended series
+    x_pw <- numeric(n)
+    x_pw[1] <- x_detrended[1]
+    for (i in 2:n) {
+      x_pw[i] <- x_detrended[i] - rho * x_detrended[i-1]
+    }
+    
+    # Step 5: Add trend back
+    x_tfpw <- x_pw + sen_slope * t
+    
+    return(x_tfpw)
+  } else {
+    return(NA)
+  }
+}
+
+# Re-run analysis with TFPW for series with |ACF| >= 0.3
+comparison_results <- data.frame()
+
+for (s in unique(df$Season)) {
+  sub_data <- df %>% filter(Season == s) %>% arrange(date)
+  
+  for (i in seq_along(vars)) {
+    v <- vars[i]
+    label <- var_labels[i]
+    x <- sub_data[[v]]
+    
+    if (length(x) >= 8) {
+      # Remove NA values
+      x_clean <- x[!is.na(x)]
+      if (length(x_clean) >= 8) {
+        # Calculate lag-1 ACF
+        acf_result <- acf(x_clean, lag.max = 1, plot = FALSE)
+        lag1_acf <- acf_result$acf[2]
+        
+        # Original MK test results
+        mkout_orig <- run_mk(x_clean)
+        
+        # Determine if pre-whitening is needed
+        needs_pw <- abs(lag1_acf) >= 0.3
+        
+        if (needs_pw) {
+          # Apply TFPW
+          x_tfpw <- tfpw(x_clean)
+          
+          if (is.numeric(x_tfpw) && length(x_tfpw) >= 8 && !any(is.na(x_tfpw))) {
+            # Re-run MK test on pre-whitened series
+            mkout_pw <- run_mk(x_tfpw)
+            
+            # Determine if inference changed
+            # Inference changed if: significance status changed OR direction changed
+            orig_sig <- mkout_orig$p < 0.05
+            pw_sig <- mkout_pw$p < 0.05
+            orig_dir <- sign(mkout_orig$slope)
+            pw_dir <- sign(mkout_pw$slope)
+            
+            inference_changed <- (orig_sig != pw_sig) | (orig_dir != pw_dir)
+            
+            comparison_results <- rbind(comparison_results, data.frame(
+              Season = s,
+              Variable = label,
+              Lag1_ACF = round(lag1_acf, 4),
+              Pre_whitened = "Yes",
+              Z_original = round(mkout_orig$Z, 4),
+              p_original = round(mkout_orig$p, 5),
+              slope_original = round(mkout_orig$slope, 5),
+              Z_pw = round(mkout_pw$Z, 4),
+              p_pw = round(mkout_pw$p, 5),
+              slope_pw = round(mkout_pw$slope, 5),
+              Inference_Changed = ifelse(inference_changed, "Yes", "No")
+            ))
+          } else {
+            # TFPW failed, use original results
+            comparison_results <- rbind(comparison_results, data.frame(
+              Season = s,
+              Variable = label,
+              Lag1_ACF = round(lag1_acf, 4),
+              Pre_whitened = "Yes (failed)",
+              Z_original = round(mkout_orig$Z, 4),
+              p_original = round(mkout_orig$p, 5),
+              slope_original = round(mkout_orig$slope, 5),
+              Z_pw = NA,
+              p_pw = NA,
+              slope_pw = NA,
+              Inference_Changed = "N/A"
+            ))
+          }
+        } else {
+          # No pre-whitening needed
+          comparison_results <- rbind(comparison_results, data.frame(
+            Season = s,
+            Variable = label,
+            Lag1_ACF = round(lag1_acf, 4),
+            Pre_whitened = "No",
+            Z_original = round(mkout_orig$Z, 4),
+            p_original = round(mkout_orig$p, 5),
+            slope_original = round(mkout_orig$slope, 5),
+            Z_pw = round(mkout_orig$Z, 4),
+            p_pw = round(mkout_orig$p, 5),
+            slope_pw = round(mkout_orig$slope, 5),
+            Inference_Changed = "N/A"
+          ))
+        }
+      }
+    }
+  }
+}
+
+# Format comparison table
+comparison_results %>%
+  mutate(
+    Original_MK = paste0("Z=", Z_original, ", p=", p_original),
+    PW_MK = ifelse(Pre_whitened == "No", 
+                   paste0("Z=", Z_pw, ", p=", p_pw),
+                   ifelse(is.na(Z_pw), "N/A", paste0("Z=", Z_pw, ", p=", p_pw))),
+    Slope_Change = ifelse(Pre_whitened == "No",
+                          paste0(slope_original, " (unchanged)"),
+                          ifelse(is.na(slope_pw), "N/A", 
+                                 paste0(slope_original, " → ", slope_pw)))
+  ) %>%
+  select(Season, Variable, Lag1_ACF, Pre_whitened, Original_MK, PW_MK, 
+         Slope_Change, Inference_Changed) %>%
+  kable(
+    format = "html",
+    caption = "Comparison of Original and Pre-Whitened Mann-Kendall Test Results",
+    col.names = c("Season", "Variable", "Lag-1 ACF", "Pre-whitened?", 
+                  "Original MK (Z, p)", "Pre-whitened MK (Z, p)", 
+                  "Sen's Slope Change", "Inference Changed?"),
+    digits = 5
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  footnote(
+    general = "Trend-Free Pre-Whitening (TFPW) was applied only to series with |lag-1 ACF| ≥ 0.3. Inference changed indicates whether statistical significance (p < 0.05) or trend direction changed after pre-whitening. Series with |ACF| < 0.3 were not pre-whitened and show identical results in both columns.",
+    general_title = "Note:"
+  )
+
+```
+
+## Pettitt Change-Point Test
+
+The Pettitt test is a non-parametric test used to detect a single change-point in a time series. It identifies the location where a significant shift in the central tendency of the data occurs, which is particularly useful for identifying abrupt changes in climatic variables.
+
+```{r}
+# Pettitt Change-Point Test
+pettitt_results <- data.frame()
+
+for (s in unique(df$Season)) {
+  sub_data <- df %>% filter(Season == s) %>% arrange(date)
+  
+  for (i in seq_along(vars)) {
+    v <- vars[i]
+    label <- var_labels[i]
+    x <- sub_data[[v]]
+    
+    if (length(x) >= 8) {
+      # Remove NA values
+      x_clean <- x[!is.na(x)]
+      dates_clean <- sub_data$date[!is.na(x)]
+      
+      if (length(x_clean) >= 8) {
+        # Perform Pettitt test
+        pettitt_out <- pettitt.test(x_clean)
+        
+        # Get change point location
+        cp_index <- pettitt_out$estimate
+        cp_date <- dates_clean[cp_index]
+        cp_year <- format(cp_date, "%Y")
+        
+        # Calculate means before and after change point
+        mean_before <- mean(x_clean[1:cp_index], na.rm = TRUE)
+        mean_after <- mean(x_clean[(cp_index + 1):length(x_clean)], na.rm = TRUE)
+        change_magnitude <- mean_after - mean_before
+        change_direction <- ifelse(change_magnitude > 0, "Increase", "Decrease")
+        
+        pettitt_results <- rbind(pettitt_results, data.frame(
+          Season = s,
+          Variable = label,
+          K_statistic = pettitt_out$statistic,
+          p_value = round(pettitt_out$p.value, 5),
+          Change_Point_Index = cp_index,
+          Change_Point_Year = cp_year,
+          Mean_Before = round(mean_before, 3),
+          Mean_After = round(mean_after, 3),
+          Change_Magnitude = round(change_magnitude, 3),
+          Change_Direction = change_direction
+        ))
+      }
+    }
+  }
+}
+
+# Display Pettitt test results
+pettitt_results %>%
+  mutate(
+    Significance = ifelse(p_value < 0.05, "Significant", "Not Significant"),
+    Mean_Change = paste0(Mean_Before, " → ", Mean_After, " (", 
+                         ifelse(Change_Magnitude > 0, "+", ""), Change_Magnitude, ")")
+  ) %>%
+  select(Season, Variable, K_statistic, p_value, Change_Point_Year, Mean_Change, Significance) %>%
+  kable(
+    format = "html",
+    caption = "Pettitt Change-Point Test Results for Seasonal Climatic Variables (2014–2024)",
+    col.names = c("Season", "Variable", "K Statistic", "p-value", "Change Point Year", 
+                  "Mean Before → After (Change)", "Significance"),
+    digits = 5
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  footnote(
+    general = "The Pettitt test detects a single change-point in the time series. The K statistic indicates the strength of the change, and the change point year shows when the shift occurred. Mean Before and After show the average values before and after the detected change point.",
+    general_title = "Note:"
+  )
+
+```
 
 ## Panel Plot of Significant Trends
 

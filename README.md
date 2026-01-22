@@ -21,9 +21,12 @@ Johns Hopkins University
 - **Non-parametric trend detection**: Mann-Kendall test implementation with Z-score calculation
 - **Trend quantification**: Sen's slope estimator for magnitude assessment
 - **Seasonal analysis**: Separate trend analysis for each season
-- **Comprehensive visualization suite**: 8 publication-ready plots
+- **Statistical power analysis**: Minimum Detectable Trend (MDT) calculations
+- **Autocorrelation diagnostics**: Lag-1 ACF assessment with Trend-Free Pre-Whitening (TFPW)
+- **Change-point detection**: Pettitt test for identifying abrupt shifts
+- **OLS sensitivity analysis**: Parametric validation of non-parametric results
+- **Comprehensive visualization suite**: Publication-ready plots
 - **Statistical tables**: Formatted HTML tables with trend test results
-- **Dual implementation**: Both R Markdown (for reports) and standalone R script versions
 
 ## Visual Examples
 
@@ -46,11 +49,12 @@ The following R packages are required:
 readr      # Data import
 dplyr      # Data manipulation
 Kendall    # Mann-Kendall test
-trend      # Sen's slope estimator
+trend      # Sen's slope estimator and Pettitt test
 knitr      # Dynamic report generation
 kableExtra # Enhanced table formatting
 ggplot2    # Data visualization
 tidyr      # Data tidying
+broom      # Model output tidying (for OLS analysis)
 ```
 
 ### Installation
@@ -58,7 +62,7 @@ Install all required packages using:
 
 ```r
 install.packages(c("readr", "dplyr", "Kendall", "trend", 
-                   "knitr", "kableExtra", "ggplot2", "tidyr"))
+                   "knitr", "kableExtra", "ggplot2", "tidyr", "broom"))
 ```
 
 ## Repository Structure
@@ -66,19 +70,36 @@ install.packages(c("readr", "dplyr", "Kendall", "trend",
 ```
 .
 ├── README.md                          # This file
-├── MK_Test.Rmd                        # R Markdown document with narrative
-├── MKTest.R                           # Standalone R script version
+├── MK_Test.Rmd                        # Main Mann-Kendall trend analysis
+├── OLS_Sensitivity_Check.Rmd          # OLS regression sensitivity analysis
 ├── CLIMATE DAR DATASET.csv            # Input climate data (required)
-└── outputs/                           # Generated plots (after running)
-    ├── panel_significant_trends.png
-    ├── complete_time_series.png
-    ├── seasonal_boxplots.png
-    ├── sens_slope_magnitude.png
-    ├── annual_trends.png
-    ├── monthly_climatology.png
-    ├── zscore_visualization.png
-    └── trend_magnitudes_by_variable.png
+└── [generated outputs]                # PNG plots and HTML reports
 ```
+
+## Analysis Files
+
+### MK_Test.Rmd — Main Trend Analysis
+
+The primary analysis document containing:
+
+- **Mann-Kendall Trend Test**: Non-parametric trend detection for each season-variable combination with Z-scores, p-values, and Bonferroni correction
+- **Statistical Power Analysis**: Calculates Minimum Detectable Trends (MDT) at 80% power to contextualize non-significant findings
+- **Lag-1 Autocorrelation Diagnostics**: Assesses serial correlation and its implications for Type I error rates
+- **Trend-Free Pre-Whitening (TFPW)**: Applies pre-whitening to series with substantial autocorrelation (|ACF| ≥ 0.3)
+- **Pettitt Change-Point Test**: Detects abrupt shifts in time series central tendency
+- **Visualizations**: 8 publication-ready plots including time series, box plots, and trend magnitude charts
+
+### OLS_Sensitivity_Check.Rmd — Parametric Validation
+
+A sensitivity analysis using Ordinary Least Squares (OLS) regression to validate the non-parametric Mann-Kendall results:
+
+- **OLS Regression**: Fits linear models (Y ~ time) for each variable and season
+- **Method Comparison**: Compares OLS slopes with Sen's slopes, and t-test significance with Mann-Kendall significance
+- **Agreement Statistics**: Quantifies direction agreement and significance agreement between methods
+- **Regression Diagnostics**: Shapiro-Wilk normality test and Durbin-Watson autocorrelation test
+- **Slope Comparison Plot**: Scatter plot showing OLS vs Sen's slope with 1:1 reference line
+
+This sensitivity check strengthens confidence in findings when both parametric and non-parametric methods agree.
 
 ## Data Requirements
 
@@ -94,34 +115,21 @@ The analysis requires a CSV file named `CLIMATE DAR DATASET.csv` with the follow
 
 ## Usage
 
-### Option 1: R Markdown (Recommended for Reports)
-
-1. Open `MK_Test.Rmd` in RStudio
+1. Open the desired `.Rmd` file in RStudio
 2. Ensure `CLIMATE DAR DATASET.csv` is in the working directory
 3. Click **Knit** to generate an HTML report with embedded results and visualizations
 
 ```r
-# Or knit from the console
-rmarkdown::render("MK_Test.Rmd")
+# Knit from the console
+rmarkdown::render("MK_Test.Rmd")              # Main analysis
+rmarkdown::render("OLS_Sensitivity_Check.Rmd") # Sensitivity analysis
 ```
-
-### Option 2: Standalone R Script
-
-1. Set your working directory to the repository folder
-2. Ensure `CLIMATE DAR DATASET.csv` is present
-3. Run the script:
-
-```r
-source("MKTest.R")
-```
-
-Or execute interactively in R/RStudio by running sections sequentially.
 
 ### Expected Outputs
 
 Running the analysis will generate:
-- 8 high-resolution PNG files (300 DPI)
-- An HTML table with statistical results (when using the RMD)
+- High-resolution PNG plots (300 DPI)
+- HTML tables with statistical results
 - Console output showing progress and key findings
 
 ![Annual Trends](annual_trends.png)
@@ -289,6 +297,6 @@ ORCID: [0009-0007-6743-8479](https://orcid.org/0009-0007-6743-8479)
 
 **Keywords**: Mann-Kendall test, Sen's slope, climate trend analysis, time series analysis, Dar es Salaam, Tanzania, rainfall trends, temperature trends, seasonal analysis, non-parametric statistics
 
-**Last Updated**: November 2024
+**Last Updated**: January 2026
 
 

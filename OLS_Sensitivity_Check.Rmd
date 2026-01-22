@@ -1,0 +1,484 @@
+---
+title: "OLS Regression Sensitivity Analysis for Seasonal Climatic Variables in Dar es Salaam, Tanzania"
+author: "January G. Msemakweli"
+date: "2025-11-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## OLS Regression Trend Analysis for Seasonal Climatic Variables
+
+This R Markdown document provides a sensitivity analysis using Ordinary Least Squares (OLS) regression to complement the Mann–Kendall trend analysis for seasonal climatic variables in Dar es Salaam, Tanzania. The analysis uses monthly data from the Tanzania Meteorological Authority covering the period 2014–2024. OLS regression provides a parametric approach to trend detection, allowing comparison with the non-parametric Mann–Kendall results.
+
+### Methodology
+
+The analysis follows these key steps:
+1. **Data Preparation**: Load and format the climatic dataset with proper date handling
+2. **Variable Selection**: Identify the climatic variables of interest (rainfall, temperatures, humidity)
+3. **OLS Regression**: Fit linear regression models (Y ~ time) for each variable and season
+4. **Statistical Inference**: Extract slope coefficients, standard errors, t-statistics, p-values, and R²
+5. **Comparison**: Generate formatted tables comparing OLS and Mann–Kendall results
+
+### Why OLS as a Sensitivity Check?
+
+While the Mann–Kendall test is preferred for climatic data due to its non-parametric nature (no assumptions about data distribution), OLS regression serves as a valuable sensitivity check because:
+
+- **Different assumptions**: OLS assumes normally distributed residuals, while Mann–Kendall does not
+- **Different test statistics**: OLS uses t-tests, while Mann–Kendall uses rank-based statistics
+- **Slope interpretation**: OLS slope represents the average rate of change, while Sen's slope represents the median rate of change
+- **Consistency check**: If both methods agree, it strengthens confidence in the findings
+
+```{r}
+library(readr)
+library(dplyr)
+library(Kendall)
+library(trend)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(tidyr)
+library(broom)
+
+df <- read_csv("CLIMATE DAR DATASET.csv", show_col_types = FALSE)
+df$date <- as.Date(paste(df$Year, df$Month, "01", sep = "-"), format="%Y-%b-%d")
+
+vars <- c("rainfall_mm",
+          "daytime_temperature_celcius",
+          "nighttime_temperature_celcius",
+          "relative_humidity_%")
+
+var_labels <- c("Rainfall (mm)",
+                "Daytime Temperature (°C)",
+                "Nighttime Temperature (°C)",
+                "Relative Humidity (%)")
+
+# Function to run OLS regression
+run_ols <- function(x) {
+  n <- length(x)
+  t <- 1:n
+  
+  # Fit linear model
+  model <- lm(x ~ t)
+  summary_model <- summary(model)
+  
+  # Extract coefficients
+  coef_table <- coef(summary_model)
+  slope <- coef_table["t", "Estimate"]
+  se <- coef_table["t", "Std. Error"]
+  t_stat <- coef_table["t", "t value"]
+  p_value <- coef_table["t", "Pr(>|t|)"]
+  
+  # R-squared
+  r_squared <- summary_model$r.squared
+  adj_r_squared <- summary_model$adj.r.squared
+  
+  # Calculate 95% confidence interval for slope
+  ci <- confint(model, "t", level = 0.95)
+  ci_lower <- ci[1]
+  ci_upper <- ci[2]
+  
+  return(list(
+    slope = slope,
+    se = se,
+    t_stat = t_stat,
+    p_value = p_value,
+    r_squared = r_squared,
+    adj_r_squared = adj_r_squared,
+    ci_lower = ci_lower,
+    ci_upper = ci_upper
+  ))
+}
+
+# Run OLS for each season and variable
+ols_results <- data.frame()
+
+for (s in unique(df$Season)) {
+  sub_data <- df %>% filter(Season == s) %>% arrange(date)
+  
+  for (i in seq_along(vars)) {
+    v <- vars[i]
+    label <- var_labels[i]
+    x <- sub_data[[v]]
+    
+    if (length(x) >= 8) {
+      ols_out <- run_ols(x)
+      ols_results <- rbind(ols_results, data.frame(
+        Season = s,
+        Variable = label,
+        OLS_Slope = round(ols_out$slope, 5),
+        SE = round(ols_out$se, 5),
+        t_statistic = round(ols_out$t_stat, 4),
+        p_value = round(ols_out$p_value, 5),
+        R_squared = round(ols_out$r_squared, 4),
+        CI_lower = round(ols_out$ci_lower, 5),
+        CI_upper = round(ols_out$ci_upper, 5)
+      ))
+    }
+  }
+}
+
+# Calculate Bonferroni correction
+n_tests <- nrow(ols_results)
+ols_results$p_value_bonferroni <- pmin(ols_results$p_value * n_tests, 1)
+
+# Display OLS results table
+ols_results %>%
+  mutate(
+    OLS_slope_CI = paste0(round(OLS_Slope, 5), " [", round(CI_lower, 5), ", ", round(CI_upper, 5), "]"),
+    p_value_corrected = round(p_value_bonferroni, 5)
+  ) %>%
+  select(Season, Variable, t_statistic, p_value, p_value_corrected, OLS_slope_CI, R_squared) %>%
+  kable(
+    format = "html",
+    caption = "OLS Regression Trend Test Results for Seasonal Climatic Variables (2014–2024)",
+    col.names = c("Season", "Variable", "t-statistic", "p-value", "p-value (Bonferroni)", "OLS Slope [95% CI]", "R²"),
+    digits = 5
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  footnote(
+    general = "OLS slope represents the average rate of change per time unit. R² indicates the proportion of variance explained by the linear trend. Bonferroni correction applied for multiple comparisons.",
+    general_title = "Note:"
+  )
+```
+
+## Comparison: OLS vs. Mann–Kendall Results
+
+This section directly compares the OLS regression results with the Mann–Kendall test results to assess consistency between parametric and non-parametric approaches.
+
+```{r}
+# --- OLS vs Mann–Kendall Comparison (match manuscript layout) ---
+
+# 1) Recompute OLS results WITHOUT rounding
+#    so direction/significance logic doesn't get messed up by rounding.
+run_ols_unrounded <- function(x) {
+  n <- length(x)
+  t <- 1:n
+  model <- lm(x ~ t)
+  sm <- summary(model)
+  ct <- coef(sm)
+
+  list(
+    slope   = as.numeric(ct["t", "Estimate"]),
+    p_value = as.numeric(ct["t", "Pr(>|t|)"])
+  )
+}
+
+ols_results_unrounded <- lapply(unique(df$Season), function(s) {
+  sub_data <- df %>% filter(Season == s) %>% arrange(date)
+
+  out <- lapply(seq_along(vars), function(i) {
+    v <- vars[i]
+    label <- var_labels[i]
+    x <- sub_data[[v]]
+
+    if (length(x) < 8) return(NULL)
+
+    ols <- run_ols_unrounded(x)
+    data.frame(
+      Season = s,
+      Variable = label,
+      OLS_Slope = ols$slope,
+      OLS_p_value = ols$p_value,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  bind_rows(out)
+}) %>% bind_rows()
+
+# 2) MK + Sen's slope (calculate Z from S and varS)
+run_mk_simple <- function(x) {
+  mk  <- MannKendall(x)
+  sen <- sens.slope(x)$estimates
+  
+  # Calculate Z-score from S and varS (MannKendall doesn't return z directly)
+  S <- mk$S
+  varS <- mk$varS
+  
+  if (varS > 0) {
+    if (S > 0) {
+      Z <- (S - 1) / sqrt(varS)
+    } else if (S == 0) {
+      Z <- 0
+    } else {
+      Z <- (S + 1) / sqrt(varS)
+    }
+  } else {
+    Z <- 0
+  }
+
+  list(
+    MK_Z = Z,
+    MK_p_value = as.numeric(mk$sl),
+    Sen_slope = as.numeric(sen)
+  )
+}
+
+mk_results_unrounded <- lapply(unique(df$Season), function(s) {
+  sub_data <- df %>% filter(Season == s) %>% arrange(date)
+
+  out <- lapply(seq_along(vars), function(i) {
+    v <- vars[i]
+    label <- var_labels[i]
+    x <- sub_data[[v]]
+
+    if (length(x) < 8) return(NULL)
+
+    mkout <- run_mk_simple(x)
+    data.frame(
+      Season = s,
+      Variable = label,
+      MK_Z = mkout$MK_Z,
+      MK_p_value = mkout$MK_p_value,
+      Sen_slope = mkout$Sen_slope,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  bind_rows(out)
+}) %>% bind_rows()
+
+# 3) Merge + build comparison table columns exactly like the manuscript
+comparison <- ols_results_unrounded %>%
+  left_join(mk_results_unrounded, by = c("Season", "Variable")) %>%
+  mutate(
+    `OLS slope (β)`   = round(OLS_Slope, 2),
+    `OLS pvalue`      = round(OLS_p_value, 3),
+    `OLS inference`   = ifelse(OLS_p_value < 0.05, "Sig", "NS"),
+
+    `MK Sen's slope`  = round(Sen_slope, 2),
+    `MK Z`            = round(MK_Z, 2),
+    `MK pvalue`       = round(MK_p_value, 3),
+    `MK inference`    = ifelse(MK_p_value < 0.05, "Sig", "NS"),
+
+    `Direction agreement` = case_when(
+      # mark near-zero when either method is essentially 0 after rounding
+      abs(round(OLS_Slope, 2)) == 0 | abs(round(Sen_slope, 2)) == 0 ~ "Near-zero",
+      sign(OLS_Slope) == sign(Sen_slope) ~ "Yes",
+      TRUE ~ "No"
+    ),
+    
+    # Additional columns for downstream compatibility
+    OLS_sig = OLS_p_value < 0.05,
+    MK_sig = MK_p_value < 0.05,
+    Significance_Agreement = ifelse(OLS_sig == MK_sig, "Yes", "No"),
+    Direction_Agreement = `Direction agreement`,
+    Full_Agreement = ifelse(Significance_Agreement == "Yes" & Direction_Agreement == "Yes", "Yes", "No")
+  )
+
+# 4) Print table
+comparison %>%
+  select(
+    Season, Variable,
+    `OLS slope (β)`, `OLS pvalue`, `OLS inference`,
+    `MK Sen's slope`, `MK Z`, `MK pvalue`, `MK inference`,
+    `Direction agreement`
+  ) %>%
+  kable(
+    format = "html",
+    caption = "Comparison of OLS regression and Mann–Kendall trend test results for seasonal climatic variables (2014–2024)",
+    col.names = c(
+      "Season", "Variable",
+      "OLS slope (β)", "OLS pvalue", "OLS inference",
+      "MK Sen's slope", "MK Z", "MK pvalue", "MK inference",
+      "Direction agreement"
+    )
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  footnote(
+    general = paste(
+      "NS = not significant at alpha = 0.05.",
+      "Direction agreement indicates whether both methods detect the same sign (+/-) of change.",
+      "'Near-zero' denotes negligible slopes where one method estimates ~0 and the other a very small magnitude."
+    ),
+    general_title = "Notes:"
+  )
+```
+
+## Summary Statistics: Method Agreement
+
+```{r}
+# Calculate agreement statistics
+agreement_stats <- comparison %>%
+  summarise(
+    Total_Tests = n(),
+    Direction_Matches = sum(Direction_Agreement == "Yes"),
+    Direction_Match_Pct = round(100 * Direction_Matches / Total_Tests, 1),
+    Significance_Matches = sum(Significance_Agreement == "Yes"),
+    Significance_Match_Pct = round(100 * Significance_Matches / Total_Tests, 1),
+    Full_Matches = sum(Full_Agreement == "Yes"),
+    Full_Match_Pct = round(100 * Full_Matches / Total_Tests, 1)
+  )
+
+# Display agreement summary
+data.frame(
+  Metric = c("Total Number of Tests", 
+             "Direction Agreement (Both detect same trend direction)",
+             "Significance Agreement (Both agree on p < 0.05)",
+             "Full Agreement (Both direction and significance)"),
+  Count = c(agreement_stats$Total_Tests,
+            agreement_stats$Direction_Matches,
+            agreement_stats$Significance_Matches,
+            agreement_stats$Full_Matches),
+  Percentage = c("100%",
+                 paste0(agreement_stats$Direction_Match_Pct, "%"),
+                 paste0(agreement_stats$Significance_Match_Pct, "%"),
+                 paste0(agreement_stats$Full_Match_Pct, "%"))
+) %>%
+  kable(
+    format = "html",
+    caption = "Summary of Agreement Between OLS and Mann–Kendall Methods",
+    col.names = c("Agreement Metric", "Count", "Percentage")
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover"))
+```
+
+## Slope Comparison: OLS vs. Sen's Slope
+
+```{r}
+# Scatter plot comparing slopes
+slope_comparison <- comparison %>%
+  select(Season, Variable, OLS_Slope, Sen_slope)
+
+p_slope <- ggplot(slope_comparison, aes(x = Sen_slope, y = OLS_Slope)) +
+  geom_point(aes(color = Season), size = 3, alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red", linewidth = 1) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue", alpha = 0.2) +
+  labs(
+    title = "Comparison of Trend Slopes: OLS vs. Sen's Slope",
+    subtitle = "Red dashed line shows 1:1 relationship; blue line shows linear fit",
+    x = "Sen's Slope (Mann–Kendall)",
+    y = "OLS Slope (Linear Regression)",
+    color = "Season"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11),
+    legend.position = "bottom"
+  ) +
+  scale_color_brewer(palette = "Set2")
+
+print(p_slope)
+ggsave("ols_vs_mk_slope_comparison.png", p_slope, width = 8, height = 6, dpi = 300)
+
+# Correlation between slopes
+slope_cor <- cor(slope_comparison$OLS_Slope, slope_comparison$Sen_slope, use = "complete.obs")
+cat("Correlation between OLS slope and Sen's slope:", round(slope_cor, 4), "\n")
+```
+
+## Detailed Slope Comparison Table
+
+```{r}
+slope_comparison %>%
+  mutate(
+    Slope_Difference = round(OLS_Slope - Sen_slope, 5),
+    Pct_Difference = round(100 * (OLS_Slope - Sen_slope) / abs(Sen_slope), 2)
+  ) %>%
+  kable(
+    format = "html",
+    caption = "Detailed Comparison of OLS and Sen's Slopes",
+    col.names = c("Season", "Variable", "OLS Slope", "Sen's Slope", "Difference (OLS - Sen)", "% Difference"),
+    digits = 5
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  footnote(
+    general = "Positive difference indicates OLS slope is larger than Sen's slope. Sen's slope is more robust to outliers as it uses median rather than mean.",
+    general_title = "Note:"
+  )
+```
+
+## OLS Regression Diagnostics
+
+Checking the assumptions of OLS regression to understand the validity of the parametric approach.
+
+```{r}
+# Function to run OLS diagnostics
+get_ols_diagnostics <- function(x) {
+  n <- length(x)
+  t <- 1:n
+  model <- lm(x ~ t)
+  
+  # Shapiro-Wilk test for normality of residuals
+  if (n >= 3 && n <= 5000) {
+    shapiro_test <- shapiro.test(residuals(model))
+    shapiro_p <- shapiro_test$p.value
+  } else {
+    shapiro_p <- NA
+  }
+  
+  # Durbin-Watson test for autocorrelation (simplified calculation)
+  resid <- residuals(model)
+  dw_stat <- sum(diff(resid)^2) / sum(resid^2)
+  
+  return(list(
+    shapiro_p = shapiro_p,
+    dw_stat = dw_stat
+  ))
+}
+
+# Run diagnostics
+diagnostics_results <- data.frame()
+
+for (s in unique(df$Season)) {
+  sub_data <- df %>% filter(Season == s) %>% arrange(date)
+  
+  for (i in seq_along(vars)) {
+    v <- vars[i]
+    label <- var_labels[i]
+    x <- sub_data[[v]]
+    
+    if (length(x) >= 8) {
+      diag <- get_ols_diagnostics(x)
+      diagnostics_results <- rbind(diagnostics_results, data.frame(
+        Season = s,
+        Variable = label,
+        Shapiro_p = round(diag$shapiro_p, 4),
+        DW_statistic = round(diag$dw_stat, 4)
+      ))
+    }
+  }
+}
+
+# Interpret diagnostics
+diagnostics_results <- diagnostics_results %>%
+  mutate(
+    Normality = ifelse(Shapiro_p > 0.05, "Normal (p > 0.05)", "Non-normal (p < 0.05)"),
+    Autocorrelation = case_when(
+      DW_statistic < 1.5 ~ "Positive autocorrelation",
+      DW_statistic > 2.5 ~ "Negative autocorrelation",
+      TRUE ~ "No significant autocorrelation"
+    )
+  )
+
+diagnostics_results %>%
+  select(Season, Variable, Shapiro_p, Normality, DW_statistic, Autocorrelation) %>%
+  kable(
+    format = "html",
+    caption = "OLS Regression Diagnostics: Normality and Autocorrelation Tests",
+    col.names = c("Season", "Variable", "Shapiro-Wilk p", "Normality Status", "Durbin-Watson", "Autocorrelation Status"),
+    digits = 4
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  footnote(
+    general = "Shapiro-Wilk test: p > 0.05 suggests normally distributed residuals. Durbin-Watson statistic: values near 2 indicate no autocorrelation; values < 1.5 suggest positive autocorrelation; values > 2.5 suggest negative autocorrelation. Non-normal residuals or autocorrelation may invalidate OLS inference, supporting the use of the Mann–Kendall test.",
+    general_title = "Note:"
+  )
+```
+
+## Conclusion
+
+The OLS regression analysis serves as a sensitivity check for the Mann–Kendall trend test results. Key findings:
+
+1. **Slope Estimates**: OLS slopes and Sen's slopes are generally similar, with a correlation of `r round(cor(comparison$OLS_Slope, comparison$Sen_slope, use = "complete.obs"), 3)` between the two methods.
+
+2. **Agreement on Significance**: The two methods agree on statistical significance in `r agreement_stats$Significance_Match_Pct`% of cases.
+
+3. **Agreement on Direction**: The two methods agree on trend direction in `r agreement_stats$Direction_Match_Pct`% of cases.
+
+4. **Diagnostic Assessment**: Where OLS assumptions (normality, no autocorrelation) are violated, the Mann–Kendall results should be preferred as the primary inference.
+
+This sensitivity analysis demonstrates that the Mann–Kendall results are robust and consistent with parametric OLS regression, lending additional confidence to the detected trends in seasonal climatic variables.
